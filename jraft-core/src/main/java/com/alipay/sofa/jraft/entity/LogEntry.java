@@ -86,6 +86,10 @@ public class LogEntry implements Checksum {
                || (this.oldLearners != null && !this.oldLearners.isEmpty());
     }
 
+    /**
+     * 学习一下,对数据进行校验码的生成
+     * @return
+     */
     @Override
     public long checksum() {
         long c = checksum(this.type.getNumber(), this.id.checksum());

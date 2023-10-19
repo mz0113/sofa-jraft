@@ -32,15 +32,12 @@ public class CounterGrpcHelper {
     public static RpcServer     rpcServer;
 
     public static void initGRpc() {
-        if ("com.alipay.sofa.jraft.rpc.impl.GrpcRaftRpcFactory".equals(RpcFactoryHelper.rpcFactory().getClass()
-            .getName())) {
-            RpcFactoryHelper.rpcFactory().registerProtobufSerializer(CounterOutter.GetValueRequest.class.getName(),
-                CounterOutter.GetValueRequest.getDefaultInstance());
-            RpcFactoryHelper.rpcFactory().registerProtobufSerializer(
-                CounterOutter.IncrementAndGetRequest.class.getName(),
-                CounterOutter.IncrementAndGetRequest.getDefaultInstance());
-            RpcFactoryHelper.rpcFactory().registerProtobufSerializer(CounterOutter.ValueResponse.class.getName(),
-                CounterOutter.ValueResponse.getDefaultInstance());
+        if ("com.alipay.sofa.jraft.rpc.impl.GrpcRaftRpcFactory".equals(RpcFactoryHelper.rpcFactory().getClass().getName())) {
+
+            //唉一个意思,这里的registerProtobufSerializer和下面的registerRespInstance都是在registerProcessor时候用,就是赋值入口不一样,使用模式是一样的,不知道为啥要这么搞
+            RpcFactoryHelper.rpcFactory().registerProtobufSerializer(CounterOutter.GetValueRequest.class.getName(), CounterOutter.GetValueRequest.getDefaultInstance());
+            RpcFactoryHelper.rpcFactory().registerProtobufSerializer(CounterOutter.IncrementAndGetRequest.class.getName(), CounterOutter.IncrementAndGetRequest.getDefaultInstance());
+            RpcFactoryHelper.rpcFactory().registerProtobufSerializer(CounterOutter.ValueResponse.class.getName(), CounterOutter.ValueResponse.getDefaultInstance());
 
             try {
                 Class<?> clazz = Class.forName("com.alipay.sofa.jraft.rpc.impl.MarshallerHelper");

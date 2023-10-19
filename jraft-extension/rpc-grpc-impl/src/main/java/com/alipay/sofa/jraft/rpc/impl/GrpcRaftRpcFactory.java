@@ -89,8 +89,8 @@ public class GrpcRaftRpcFactory implements RaftRpcFactory {
         Requires.requireTrue(port > 0 && port < 0xFFFF, "port out of range:" + port);
         final MutableHandlerRegistry handlerRegistry = new MutableHandlerRegistry();
         final Server server = ServerBuilder.forPort(port) //
-            .fallbackHandlerRegistry(handlerRegistry) //
-            .directExecutor() //
+            .fallbackHandlerRegistry(handlerRegistry) //第一级的服务注册表是通过ServerBuilder.addService()方式添加的,fallback是第二级,可以后续动态添加注册
+            .directExecutor() //是说IO线程和业务执行线程共用
             .maxInboundMessageSize(RPC_MAX_INBOUND_MESSAGE_SIZE) //
             .build();
         final RpcServer rpcServer = new GrpcServer(server, handlerRegistry, this.parserClasses, getMarshallerRegistry());

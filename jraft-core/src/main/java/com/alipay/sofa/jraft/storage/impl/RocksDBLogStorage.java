@@ -148,6 +148,17 @@ public class RocksDBLogStorage implements LogStorage, Describer {
     private final Lock                      readLock      = this.readWriteLock.readLock();
     private final Lock                      writeLock     = this.readWriteLock.writeLock();
 
+    /**
+     * firstLogIndex 是指 Raft 协议中的首个日志条目的索引值。它表示当前节点所持有的日志条目中的第一个条目的索引。
+     * 在 Raft 中，每个节点都会维护一个有序的日志条目列表，用于记录系统状态的变化。
+     * firstLogIndex 的意义在于确定当前节点的日志条目起始位置，它可以帮助节点进行日志的复制和同步。
+     *
+     * 如果一个节点是在一个已经运行了一段时间的集群中加入的，它需要从其他节点复制日志条目，
+     * 并且将自己的日志与集群中的其他节点保持一致。在这种情况下，它的 firstLogIndex 值应该是集群中已有的最后一个日志条目的索引值加1，而不是0。
+     *
+     * 所以重点是LogEntry是单调递增的,一个节点中途加入到集群中,那么它的第一个日志条目应该是集群内最后一个日志条目的Index序号
+     * 也就是这是单挑递增的日志Entry的序号
+     */
     private volatile long                   firstLogIndex = 1;
 
     private volatile boolean                hasLoadFirstLogIndex;
@@ -207,6 +218,7 @@ public class RocksDBLogStorage implements LogStorage, Describer {
             this.totalOrderReadOptions = new ReadOptions();
             this.totalOrderReadOptions.setTotalOrderSeek(true);
 
+            // 打开本地存储引擎 RocksDB，并从本地 conf 日志中恢复集群节点配置和 firstLogIndex 数据
             return initAndLoad(opts.getConfigurationManager());
         } catch (final RocksDBException e) {
             LOG.error("Fail to init RocksDBLogStorage, path={}.", this.path, e);
@@ -217,6 +229,15 @@ public class RocksDBLogStorage implements LogStorage, Describer {
 
     }
 
+    /**
+     * JRaft 在 RocksDB 中定义了两个 ColumnFamily，
+     * 除了默认的 ColumnFamily 外，还定义了一个名为 Configuration 的 ColumnFamily 用于存储集群节点配置相关的 LogEntry 实例，
+     * 而默认的 ColumnFamily 除了包含 Configuration 中的数据之外，还用于存储用户数据相关的 LogEntry 实例。
+     * 本文如不做特殊说明，均使用 conf family 指代前者，使用 data family 指代后者
+     * @param confManager
+     * @return
+     * @throws RocksDBException
+     */
     private boolean initAndLoad(final ConfigurationManager confManager) throws RocksDBException {
         this.hasLoadFirstLogIndex = false;
         this.firstLogIndex = 1;
@@ -229,6 +250,8 @@ public class RocksDBLogStorage implements LogStorage, Describer {
         columnFamilyDescriptors.add(new ColumnFamilyDescriptor(RocksDB.DEFAULT_COLUMN_FAMILY, cfOption));
 
         openDB(columnFamilyDescriptors);
+
+        //恢复数据 todo但是没看见恢复到fsm的代码啊
         load(confManager);
         return onInitLoaded();
     }
@@ -247,12 +270,15 @@ public class RocksDBLogStorage implements LogStorage, Describer {
                 final byte[] bs = it.value();
 
                 // LogEntry index
+                // key 的长度为 8，说明是一个 LogEntry 数据，LogEntry 数据的 key 是一个 long 型的 logIndex
                 if (ks.length == 8) {
                     final LogEntry entry = this.logEntryDecoder.decode(bs);
                     if (entry != null) {
+                        // 仅处理 ENTRY_TYPE_CONFIGURATION 类型的 LogEntry
                         if (entry.getType() == EntryType.ENTRY_TYPE_CONFIGURATION) {
                             final ConfigurationEntry confEntry = new ConfigurationEntry();
                             confEntry.setId(new LogId(entry.getId().getIndex(), entry.getId().getTerm()));
+                            // 基于日志数据设置集群节点配置
                             confEntry.setConf(new Configuration(entry.getPeers(), entry.getLearners()));
                             if (entry.getOldPeers() != null) {
                                 confEntry.setOldConf(new Configuration(entry.getOldPeers(), entry.getOldLearners()));
@@ -266,8 +292,11 @@ public class RocksDBLogStorage implements LogStorage, Describer {
                             BytesUtil.toHex(bs));
                     }
                 } else {
+                    // 不是 LogEntry，目前只能是 meta/firstLogIndex，用于记录 firstLogIndex 值
                     if (Arrays.equals(FIRST_LOG_IDX_KEY, ks)) {
+                        // 初始化 firstLogIndex
                         setFirstLogIndex(Bits.getLong(bs, 0));
+                        // 剔除 [0, firstLogIndex) 之间的 conf 和 data 数据 TODO 为什么要剔除?
                         truncatePrefixInBackground(0L, this.firstLogIndex);
                     } else {
                         LOG.warn("Unknown entry in configuration storage key={}, value={}.", BytesUtil.toHex(ks),

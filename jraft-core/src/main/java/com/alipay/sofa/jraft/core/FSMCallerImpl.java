@@ -171,7 +171,7 @@ public class FSMCallerImpl implements FSMCaller {
     private final AtomicLong                                        applyingIndex;
     private volatile RaftException                                  error;
     private Disruptor<ApplyTask>                                    disruptor;
-    private RingBuffer<ApplyTask>                                   taskQueue;
+    private RingBuffer<ApplyTask>                                   taskQueue; //Log已经多数派提交了,才会向这个taskQueue添加任务以便应用到状态机
     private volatile CountDownLatch                                 shutdownLatch;
     private NodeMetrics                                             nodeMetrics;
     private final CopyOnWriteArrayList<LastAppliedLogIndexListener> lastAppliedLogIndexListeners = new CopyOnWriteArrayList<>();
@@ -398,11 +398,13 @@ public class FSMCallerImpl implements FSMCaller {
         } else {
             if (maxCommittedIndex >= 0) {
                 this.currTask = TaskType.COMMITTED;
-                doCommitted(maxCommittedIndex);
+                doCommitted(maxCommittedIndex);//调用用户状态机
                 maxCommittedIndex = -1L; // reset maxCommittedIndex
             }
             final long startMs = Utils.monotonicMs();
             try {
+
+                //下面就是根据Task类型调用不同的状态机实现方法罢了
                 switch (task.type) {
                     case COMMITTED:
                         Requires.requireTrue(false, "Impossible");
@@ -550,6 +552,7 @@ public class FSMCallerImpl implements FSMCaller {
                 }
 
                 // Apply data task to user state machine
+                //将数据Apply到状态机中交给用户处理
                 doApplyTasks(iterImpl);
             }
 

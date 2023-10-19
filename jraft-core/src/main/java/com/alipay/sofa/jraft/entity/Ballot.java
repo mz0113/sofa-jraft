@@ -56,6 +56,11 @@ public class Ballot {
     /**
      * Init the ballot with current conf and old conf.
      *
+     * 在JRaft中，初始化Ballot时传入的两个参数 final Configuration conf 和 final Configuration oldConf 代表了最终的配置和旧的配置。
+     *  conf 参数表示最终的配置，即当前节点在进行选举或者状态转换后的最新配置。它包含了最新的节点列表、节点的角色等信息。通过传入最终的配置，Ballot可以在选举或状态转换后，更新节点的配置信息，确保节点在新的配置下正常运行。
+     *  oldConf 参数表示旧的配置，即选举或状态转换之前的配置。它用于处理在配置变更过程中可能出现的一些特殊情况，例如旧的配置尚未完全下线的情况下进行选举或状态转换。通过传入旧的配置，Ballot可以在处理选举或状态转换时，考虑到旧配置中的节点情况，确保系统的连续性和一致性。
+     * 这两个配置参数的作用是为了在选举或状态转换过程中，确保节点的配置信息得到正确的更新和处理，避免由于配置变更引起的不一致或错误
+     *
      * @param conf    current configuration
      * @param oldConf old configuration
      * @return true if init success
@@ -102,7 +107,7 @@ public class Ballot {
         if (peer != null) {
             if (!peer.found) {
                 peer.found = true;
-                this.quorum--;
+                this.quorum--;//获得选票后 , 这里会减去quorum的值
             }
             hint.pos0 = peer.index;
         } else {
@@ -136,6 +141,7 @@ public class Ballot {
      * @return true if the ballot is granted
      */
     public boolean isGranted() {
+        //quorum在初始化时候是半数+1,然后来一票就扣一次,扣到0就说明通过了
         return this.quorum <= 0 && this.oldQuorum <= 0;
     }
 }

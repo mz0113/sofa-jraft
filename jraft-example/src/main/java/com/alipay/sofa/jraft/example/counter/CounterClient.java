@@ -58,7 +58,7 @@ public class CounterClient {
 
         final PeerId leader = RouteTable.getInstance().selectLeader(groupId);
         System.out.println("Leader is " + leader);
-        final int n = 1000;
+        final int n = 1;
         final CountDownLatch latch = new CountDownLatch(n);
         final long start = System.currentTimeMillis();
         for (int i = 0; i < n; i++) {

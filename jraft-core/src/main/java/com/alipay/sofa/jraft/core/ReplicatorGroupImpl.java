@@ -127,6 +127,8 @@ public class ReplicatorGroupImpl implements ReplicatorGroup {
                 return false;
             }
         }
+
+        //启动副本,各个副本自己来追踪进度同步日志
         final ThreadId rid = Replicator.start(opts, this.raftOptions);
         if (rid == null) {
             LOG.error("Fail to start replicator to peer={}, replicatorType={}.", peer, replicatorType);
@@ -259,14 +261,16 @@ public class ReplicatorGroupImpl implements ReplicatorGroup {
         }
         for (final ThreadId r : this.replicatorMap.values()) {
             if (r != candidate) {
+                //TODO 停止其他的所有副本,这里的停止是啥意思得看源码跟过去
                 Replicator.stop(r);
             }
         }
-        this.replicatorMap.clear();
+        this.replicatorMap.clear();//TODO 咋还清空掉了啊
         this.failureReplicators.clear();
         return candidate;
     }
 
+    //选出一个logIndex最大的作为候选者
     @Override
     public PeerId findTheNextCandidate(final ConfigurationEntry conf) {
         PeerId peerId = null;
@@ -280,7 +284,10 @@ public class ReplicatorGroupImpl implements ReplicatorGroup {
             if (nextPriority == ElectionPriority.NotElected) {
                 continue;
             }
+            //获取节点的最新log日志序号
             final long nextIndex = Replicator.getNextIndex(entry.getValue());
+
+            //选出一个logIndex最大的作为候选者
             if (nextIndex > maxIndex) {
                 maxIndex = nextIndex;
                 peerId = entry.getKey();

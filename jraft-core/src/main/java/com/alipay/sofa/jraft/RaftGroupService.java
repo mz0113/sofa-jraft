@@ -123,11 +123,13 @@ public class RaftGroupService {
         if (StringUtils.isBlank(this.groupId)) {
             throw new IllegalArgumentException("Blank group id:" + this.groupId);
         }
-        //Adds RPC server to Server.
+        //Adds RPC server to Server. //TODO 用途暂不清楚
         NodeManager.getInstance().addAddress(this.serverId.getEndpoint());
 
+        //上面都是参数校验,不用看  ; 这才是真正的raft集群中的Node,所以感觉一切逻辑就是围绕在这个node里面了
         this.node = RaftServiceFactory.createAndInitRaftNode(this.groupId, this.serverId, this.nodeOptions);
         if (startRpcServer) {
+            //启动grpcServer
             this.rpcServer.init(null);
         } else {
             LOG.warn("RPC server is not started in RaftGroupService.");

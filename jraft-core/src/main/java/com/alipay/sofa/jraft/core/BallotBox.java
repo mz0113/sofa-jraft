@@ -92,6 +92,14 @@ public class BallotBox implements Lifecycle<BallotBoxOptions>, Describer {
     /**
      * Called by leader, otherwise the behavior is undefined
      * Set logs in [first_log_index, last_log_index] are stable at |peer|.
+     *
+     * 这个commitAt不是真的多数派都复制完了要提交,而是哪个节点复制完了就来提交一下将ballot的票投一次
+     * Replicator#onAppendEntriesReturned() 这是副本同步完数据后调用commitAt来投票了
+     * NodeImpl#LeaderStableClosure() 这是本地Leader节点Log写完完数据后调用commitAt来投票了
+     *
+     *                 final Ballot bl = this.pendingMetaQueue.get((int) (logIndex - this.pendingIndex));
+     *                 hint = bl.grant(peer, hint); //这是这段代码的核心
+     *
      */
     public boolean commitAt(final long firstLogIndex, final long lastLogIndex, final PeerId peer) {
         // TODO  use lock-free algorithm here?
@@ -111,10 +119,14 @@ public class BallotBox implements Lifecycle<BallotBoxOptions>, Describer {
 
             final long startAt = Math.max(this.pendingIndex, firstLogIndex);
             Ballot.PosHint hint = new Ballot.PosHint();
+
             for (long logIndex = startAt; logIndex <= lastLogIndex; logIndex++) {
+
+                //每一条日志entry都有一个Ballot!另外就是要等多数派从节点同步完日志后才会commit成功的
                 final Ballot bl = this.pendingMetaQueue.get((int) (logIndex - this.pendingIndex));
                 hint = bl.grant(peer, hint);
                 if (bl.isGranted()) {
+                    //如果第三条提交成功了,第二条却没提交成功.这个情况是不可能的,因为从节点副本接收条目2的前提是已经接收条目1了,所以如果这里面任意一个条目是多数派了,那么说明之前的条目一定也是一半以上节点收到了
                     lastCommittedIndex = logIndex;
                 }
             }
@@ -134,7 +146,7 @@ public class BallotBox implements Lifecycle<BallotBoxOptions>, Describer {
         } finally {
             this.stampedLock.unlockWrite(stamp);
         }
-        this.waiter.onCommitted(lastCommittedIndex);
+        this.waiter.onCommitted(lastCommittedIndex);//这里waiter是fmsCaller
         return true;
     }
 
@@ -195,6 +207,8 @@ public class BallotBox implements Lifecycle<BallotBoxOptions>, Describer {
      * @return          returns true on success
      */
     public boolean appendPendingTask(final Configuration conf, final Configuration oldConf, final Closure done) {
+
+        //会new一个投票箱出来
         final Ballot bl = new Ballot();
         if (!bl.init(conf, oldConf)) {
             LOG.error("Fail to init ballot.");

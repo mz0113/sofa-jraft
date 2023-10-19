@@ -70,7 +70,7 @@ public class HashedWheelTimer implements Timer {
     private volatile int                                             workerState;                                                  // 0 - init, 1 - started, 2 - shut down
 
     private final long                                               tickDuration;
-    private final HashedWheelBucket[]                                wheel;
+    private final HashedWheelBucket[/*每个元素代表一个slot,整个数组就是wheel的一圈*/]                                wheel;
     private final int                                                mask;
     private final CountDownLatch                                     startTimeInitialized   = new CountDownLatch(1);
     private final Queue<HashedWheelTimeout>                          timeouts               = new ConcurrentLinkedQueue<>();
@@ -375,6 +375,7 @@ public class HashedWheelTimer implements Timer {
     private final class Worker implements Runnable {
         private final Set<Timeout> unprocessedTimeouts = new HashSet<>();
 
+        //tick就是wheel中的slot,应该是无限自增的
         private long               tick;
 
         @Override
@@ -390,14 +391,14 @@ public class HashedWheelTimer implements Timer {
             startTimeInitialized.countDown();
 
             do {
-                final long deadline = waitForNextTick();
+                final long deadline = waitForNextTick();//wait直到时间抵达下一个tick刻度,比如0ms 10ms 20ms 30ms
                 if (deadline > 0) {
-                    int idx = (int) (tick & mask);
-                    processCancelledTasks();
-                    HashedWheelBucket bucket = wheel[idx];
+                    int idx = (int) (tick & mask); //该处理第idx个槽位了
+                    processCancelledTasks();//在执行本slot槽位任务之前,先把需要cancel的任务都取消掉,但是为啥不能执行的时候再判断是否被取消呢?反正都是同一个timeout对象给到用户了.估计是不想留着占内存吧如果延时很久的话
+                    HashedWheelBucket bucket = wheel[idx];//处理这个槽的bucket,bucket内部含双向链表的timeout任务
                     transferTimeoutsToBuckets();
-                    bucket.expireTimeouts(deadline);
-                    tick++;
+                    bucket.expireTimeouts(deadline);//他这个不是分层时间轮啊,还是单层的,回导致需要遍历所有的task将轮数减1
+                    tick++;//该处理下一个tick咯
                 }
             } while (workerStateUpdater.get(HashedWheelTimer.this) == WORKER_STATE_STARTED);
 
@@ -417,9 +418,16 @@ public class HashedWheelTimer implements Timer {
             processCancelledTasks();
         }
 
+        /**
+         * 把新添加的任务从待添加队列中取出来然后放到正确bucket中
+         */
         private void transferTimeoutsToBuckets() {
             // transfer only max. 100000 timeouts per tick to prevent a thread to stale the workerThread when it just
             // adds new timeouts in a loop.
+
+            //每次最多处理10W个任务 超出只能等下一个tick处理了
+            //在 HashedWheelTimer 的代码中，有一个注释解释了这个限制的目的。这是为了避免某个其他线程在循环中频繁添加新的超时任务,
+            //导致工作线程(内部的Woker,就是waitNextTick的,也就是这里的当前线程)一直忙于处理这些任务而无法处理其他任务，从而导致线程无法及时完成其他工作。
             for (int i = 0; i < 100000; i++) {
                 HashedWheelTimeout timeout = timeouts.poll();
                 if (timeout == null) {
@@ -431,14 +439,16 @@ public class HashedWheelTimer implements Timer {
                     continue;
                 }
 
+                //延迟的总刻度数量
                 long calculated = timeout.deadline / tickDuration;
-                timeout.remainingRounds = (calculated - tick) / wheel.length;
+                timeout.remainingRounds = (calculated - tick) / wheel.length;//得到轮次
 
+                //当前tick,注意这里是单线程,只会有一个线程使用tick字段,如果calculated是过去的时间,那么就放到下一个tick进行处理
                 final long ticks = Math.max(calculated, tick); // Ensure we don't schedule for past.
-                int stopIndex = (int) (ticks & mask);
+                int stopIndex = (int) (ticks & mask);//应该放到wheel中的哪一个slot(即bucket)
 
                 HashedWheelBucket bucket = wheel[stopIndex];
-                bucket.addTimeout(timeout);
+                bucket.addTimeout(timeout);//把任务添加到对应的slot位置即可,但是也没体现出分层啊,难道它的分层就是说round?而不是多个whee对象吗?
             }
         }
 
@@ -467,10 +477,21 @@ public class HashedWheelTimer implements Timer {
          * current time otherwise (with Long.MIN_VALUE changed by +1)
          */
         private long waitForNextTick() {
-            long deadline = tickDuration * (tick + 1);
+
+            //逻辑上 , 下一个tick被触发应该过去n个tickDuration之后,这个是逻辑时间帧
+            long deadline = tickDuration * (tick + 1); //下一个tick对应的nanoTime的长度 , 注意这里是长度 , 而不是具体的某个时刻
 
             for (;;) {
+
+                //现实世界距离timer启动已经过了currentTime个纳秒了,startTime是一开始启动时候赋值的nanoTime
                 final long currentTime = System.nanoTime() - startTime;
+
+                //这是因为在将纳秒转换为毫秒时，如果直接进行整数除法，可能会丢失一些精确度。例如，如果时间差是1999999纳秒，直接除以1000000得到的结果是1毫秒，但实际上应该是2毫秒。
+                //通过在时间差上加上999999，可以确保在进行整数除法时，将时间差向上取整到最接近的毫秒。这样可以更准确地计算从当前时间到截止时间的毫秒数。
+                //所以这句话其实含义就是还需要睡眠的纳秒数 long sleepTimeNanos = deadline - currentTime;
+
+                //刚开始启动时候,极有可能currentTime已经过去蛮久了,但是tick却没前进(比如线程未分配到CPU时间片),那么sleeTimeMs就是0,然后立刻处理这个tick,直到下一个tick还不到足够的时间差为止.
+                //就是我应该要处理第5个tick了,但是第五个tick要求deadline是30ms(也就是要求已过去30ms) , 那么currentTime现实世界必须已经过去30ms才行,否则就得等一会儿
                 long sleepTimeMs = (deadline - currentTime + 999999) / 1000000;
 
                 if (sleepTimeMs <= 0) {
@@ -670,16 +691,17 @@ public class HashedWheelTimer implements Timer {
          * Expire all {@link HashedWheelTimeout}s for the given {@code deadline}.
          */
         public void expireTimeouts(long deadline) {
-            HashedWheelTimeout timeout = head;
+            HashedWheelTimeout timeout = head; //每个bucket都有自己的head
 
-            // process all timeouts
+            //循环检查所有的任务
             while (timeout != null) {
                 HashedWheelTimeout next = timeout.next;
-                if (timeout.remainingRounds <= 0) {
-                    next = remove(timeout);
-                    if (timeout.deadline <= deadline) {
+                if (timeout.remainingRounds <= 0) {//此任务的剩余wheel轮数已经为0了
+                    next = remove(timeout);//从链表中移除该任务,准备触发
+                    if (timeout.deadline <= deadline) {//任务应该在nanoTime_1时执行,deadline是此tick的对应的nanoTime
                         timeout.expire();
                     } else {
+                        //应该在3秒时触发,但是现在缺才2秒,那就不对了,另外这个deadline是根据tick算出来的相对值 tick * slotDuration,不是system.nanoTime()
                         // The timeout was placed into a wrong slot. This should never happen.
                         throw new IllegalStateException(String.format("timeout.deadline (%d) > deadline (%d)",
                             timeout.deadline, deadline));
@@ -687,6 +709,7 @@ public class HashedWheelTimer implements Timer {
                 } else if (timeout.isCancelled()) {
                     next = remove(timeout);
                 } else {
+                    //轮次减1,这个应该很重要,每处理一次bucket意味着又转了一轮了,但是这要把所有任务都遍历完减1,应该没必要吧...TODO 是否有更好的方式呢
                     timeout.remainingRounds--;
                 }
                 timeout = next;
@@ -694,6 +717,9 @@ public class HashedWheelTimer implements Timer {
         }
 
         public HashedWheelTimeout remove(HashedWheelTimeout timeout) {
+
+            //双向链表 , 删除元素罢了
+            // a <> b <> c
             HashedWheelTimeout next = timeout.next;
             // remove timeout that was either processed or cancelled by updating the linked-list
             if (timeout.prev != null) {

@@ -92,6 +92,11 @@ public class CounterServiceImpl implements CounterService {
         return this.counterServer.redirect().getRedirect();
     }
 
+    /**
+     *
+     * @param delta
+     * @param closure 其用于回调的run方法就是发送这个请求的response回去
+     */
     @Override
     public void incrementAndGet(final long delta, final CounterClosure closure) {
         applyOperation(CounterOperation.createIncrement(delta), closure);
@@ -108,6 +113,8 @@ public class CounterServiceImpl implements CounterService {
             final Task task = new Task();
             task.setData(ByteBuffer.wrap(SerializerManager.getSerializer(SerializerManager.Hessian2).serialize(op)));
             task.setDone(closure);
+
+            //业务实现,调用node#apply()方法来添加一个任务,内部是提交到一个队列中去了
             this.counterServer.getNode().apply(task);
         } catch (CodecException e) {
             String errorMsg = "Fail to encode CounterOperation";

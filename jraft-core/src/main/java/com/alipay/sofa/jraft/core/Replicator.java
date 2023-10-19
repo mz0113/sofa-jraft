@@ -912,7 +912,7 @@ public class Replicator implements ThreadId.OnError {
         LOG.info("Replicator={}@{} is started", r.id, r.options.getPeerId());
         r.catchUpClosure = null;
         r.lastRpcSendTimestamp = Utils.monotonicMs();
-        r.startHeartbeatTimer(Utils.nowMs());
+        r.startHeartbeatTimer(Utils.nowMs());//Replicator#onHeartbeatReturned() 中递归实现不间断的进行下一次心跳发送
         // id.unlock in sendEmptyEntries
         r.sendProbeRequest();
         return r.id;
@@ -1364,6 +1364,7 @@ public class Replicator implements ThreadId.OnError {
                 LOG.debug(sb.toString());
             }
             if (continueSendEntries) {
+                //继续发送,递归方式
                 // unlock in sendEntries.
                 r.sendEntries();
             }
@@ -1520,6 +1521,8 @@ public class Replicator implements ThreadId.OnError {
         final int entriesSize = request.getEntriesCount();
         if (entriesSize > 0) {
             if (r.options.getReplicatorType().isFollower()) {
+                //该副本将Log同步完毕后进行提交
+
                 // Only commit index when the response is from follower.
                 r.options.getBallotBox().commitAt(r.nextIndex, r.nextIndex + entriesSize - 1, r.options.getPeerId());
             }
@@ -1567,6 +1570,11 @@ public class Replicator implements ThreadId.OnError {
         return true;
     }
 
+
+    /**
+     * 由LogManagerImpl来唤醒它注册的回调,以便通知他新数据到了
+     * @param nextWaitIndex
+     */
     private void waitMoreEntries(final long nextWaitIndex) {
         try {
             LOG.debug("Node {} waits more entries", this.options.getNode().getNodeId());

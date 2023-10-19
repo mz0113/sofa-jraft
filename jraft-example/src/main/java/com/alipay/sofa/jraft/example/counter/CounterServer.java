@@ -51,12 +51,14 @@ public class CounterServer {
         FileUtils.forceMkdir(new File(dataPath));
 
         // here use same RPC server for raft and business. It also can be seperated generally
+        // SPI模式
         final RpcServer rpcServer = RaftRpcServerFactory.createRaftRpcServer(serverId.getEndpoint());
-        // GrpcServer need init marshaller
+        // 如果是 GRPC的Server模式 需要初始化请求和响应的 marshaller , 也就是序列化器
         CounterGrpcHelper.initGRpc();
+
         CounterGrpcHelper.setRpcServer(rpcServer);
 
-        // register business processor
+        //注册业务的processor处理器
         CounterService counterService = new CounterServiceImpl(this);
         rpcServer.registerProcessor(new GetValueRequestProcessor(counterService));
         rpcServer.registerProcessor(new IncrementAndGetRequestProcessor(counterService));
@@ -71,9 +73,11 @@ public class CounterServer {
         nodeOptions.setRaftMetaUri(dataPath + File.separator + "raft_meta");
         // snapshot, optional, generally recommended
         nodeOptions.setSnapshotUri(dataPath + File.separator + "snapshot");
-        // init raft group service framework
+
+
+
+        //启动整个raft集群,核心就是这两句,上面都是获取各项配置罢了.只要认准这两行就行
         this.raftGroupService = new RaftGroupService(groupId, serverId, nodeOptions, rpcServer);
-        // start raft node
         this.node = this.raftGroupService.start();
     }
 
@@ -116,6 +120,7 @@ public class CounterServer {
         final String serverIdStr = args[2];
         final String initConfStr = args[3];
 
+        //NodeOptions是针对RaftNode的一些参数配置,这样来由外部传入,就能更加友好方便了
         final NodeOptions nodeOptions = new NodeOptions();
         // for test, modify some params
         // set election timeout to 1s
@@ -129,6 +134,8 @@ public class CounterServer {
         if (!serverId.parse(serverIdStr)) {
             throw new IllegalArgumentException("Fail to parse serverId:" + serverIdStr);
         }
+
+        //初始化添加raft集群其余节点的ip信息
         final Configuration initConf = new Configuration();
         if (!initConf.parse(initConfStr)) {
             throw new IllegalArgumentException("Fail to parse initConf:" + initConfStr);

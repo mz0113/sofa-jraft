@@ -130,19 +130,26 @@ public class GrpcServer implements RpcServer {
     @Override
     public void registerProcessor(final RpcProcessor processor) {
         final String interest = processor.interest();
+
+        //最外面 CounterGrpcHelper.initGRpc() 时候注册的序列化器就在这里咯
         final Message reqIns = Requires.requireNonNull(this.parserClasses.get(interest), "null default instance: " + interest);
+        MethodDescriptor.Marshaller<Message> marshaller = ProtoUtils.marshaller(reqIns);
+        //定义一个方法,这种应该是属于API编程方式,不需要在proto文件中定义接口了,也不需要创建serviceImpl类来实现接口,转而创建一个handler对象来处理此method的请求
         final MethodDescriptor<Message, Message> method = MethodDescriptor //
                 .<Message, Message>newBuilder() //
                 .setType(MethodDescriptor.MethodType.UNARY) //
                 .setFullMethodName(
+                        //接口的方法名称固定为 _call
                     MethodDescriptor.generateFullMethodName(processor.interest(), GrpcRaftRpcFactory.FIXED_METHOD_NAME)) //
-                .setRequestMarshaller(ProtoUtils.marshaller(reqIns)) //
+                .setRequestMarshaller(marshaller) //为与请求对象类型相同的对象设置此序列化器
                 .setResponseMarshaller(ProtoUtils.marshaller(this.marshallerRegistry.findResponseInstanceByRequest(interest))) //
                 .build();
 
         final ServerCallHandler<Message, Message> handler = ServerCalls.asyncUnaryCall(
                 (request, responseObserver) -> {
                     final SocketAddress remoteAddress = RemoteAddressInterceptor.getRemoteAddress();
+
+                    //TODO 这个还不知道干啥的
                     final Connection conn = ConnectionInterceptor.getCurrentConnection(this.closedEventListeners);
 
                     final RpcContext rpcCtx = new RpcContext() {
@@ -172,24 +179,28 @@ public class GrpcServer implements RpcServer {
                         }
                     };
 
-                    final RpcProcessor.ExecutorSelector selector = processor.executorSelector();
+                    //根据请求类型挑线程池出来
                     Executor executor;
-                    if (selector != null && request instanceof RpcRequests.AppendEntriesRequest) {
-                        final RpcRequests.AppendEntriesRequest req = (RpcRequests.AppendEntriesRequest) request;
-                        final RpcRequests.AppendEntriesRequestHeader.Builder header = RpcRequests.AppendEntriesRequestHeader //
-                                .newBuilder() //
-                                .setGroupId(req.getGroupId()) //
-                                .setPeerId(req.getPeerId()) //
-                                .setServerId(req.getServerId());
-                        executor = selector.select(interest, header.build());
-                    } else {
-                        executor = processor.executor();
+                    {
+                        final RpcProcessor.ExecutorSelector selector = processor.executorSelector();
+                        if (selector != null && request instanceof RpcRequests.AppendEntriesRequest) {
+                            final RpcRequests.AppendEntriesRequest req = (RpcRequests.AppendEntriesRequest) request;
+                            final RpcRequests.AppendEntriesRequestHeader.Builder header = RpcRequests.AppendEntriesRequestHeader //
+                                    .newBuilder() //
+                                    .setGroupId(req.getGroupId()) //
+                                    .setPeerId(req.getPeerId()) //
+                                    .setServerId(req.getServerId());
+                            executor = selector.select(interest, header.build());
+                        } else {
+                            executor = processor.executor();
+                        }
+
+                        if (executor == null) {
+                            executor = this.defaultExecutor;
+                        }
                     }
 
-                    if (executor == null) {
-                        executor = this.defaultExecutor;
-                    }
-
+                    //调用业务的processor处理请求就可以了
                     if (executor != null) {
                         executor.execute(() -> processor.handleRequest(rpcCtx, request));
                     } else {
@@ -198,11 +209,13 @@ public class GrpcServer implements RpcServer {
                 });
 
         final ServerServiceDefinition serviceDef = ServerServiceDefinition //
-                .builder(interest) //
+                .builder(interest) //interest就是serviceName
                 .addMethod(method, handler) //
                 .build();
 
         this.handlerRegistry
+                //addService也可以传一个BindableService的实现类,即可绑定的实现类对象,本质上两者应该是相同的,底层都是绑定ServerServiceDefinition
+                //调用后,请求交给上面定义的handler对象来处理
             .addService(ServerInterceptors.intercept(serviceDef, this.serverInterceptors.toArray(new ServerInterceptor[0])));
     }
 
